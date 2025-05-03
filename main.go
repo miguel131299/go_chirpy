@@ -159,6 +159,72 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, response)
 }
 
+func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, r *http.Request) {
+	type UserParams struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	type ErrorResponse struct {
+		Error string `json:"error"`
+	}
+
+	type UserResponse struct {
+		ID        string `json:"id"`
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+		Email     string `json:"email"`
+	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Bearer Token: %v", err)
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "Error getting Bearer Token"})
+		return
+	}
+
+	var params UserParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		log.Printf("Error decoding JSON: %v", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Something went wrong"})
+		return
+	}
+
+	hashed, err := auth.HashPassword(params.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %v", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Something went wrong"})
+		return
+	}
+
+	userUuid, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		log.Printf("Invalid Bearer Token: %v", err)
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "Invalid Bearer Token"})
+		return
+	}
+
+	user, err := cfg.db.UpdateUserData(r.Context(), database.UpdateUserDataParams{
+		Email:          params.Email,
+		HashedPassword: hashed,
+		ID:             userUuid,
+	})
+	if err != nil {
+		log.Printf("Error updating user: %v", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Could not update user"})
+		return
+	}
+
+	response := UserResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (cfg *apiConfig) postChirpHandler(w http.ResponseWriter, r *http.Request) {
 	type ChirpParams struct {
 		Body string `json:"body"`
@@ -208,7 +274,6 @@ func (cfg *apiConfig) postChirpHandler(w http.ResponseWriter, r *http.Request) {
 		Body:   cleaned,
 		UserID: userUuid,
 	})
-
 	if err != nil {
 		log.Printf("Error creating chirp: %v", err)
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Could not create user"})
@@ -305,6 +370,59 @@ func (cfg *apiConfig) getSingleChirpHandler(w http.ResponseWriter, r *http.Reque
 
 	// Finally, write JSON array
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (cfg *apiConfig) deleteSingleChirpHandler(w http.ResponseWriter, r *http.Request) {
+	type ErrorResponse struct {
+		Error string `json:"error"`
+	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Bearer Token: %v", err)
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "Error getting Bearer Token"})
+		return
+	}
+
+	userUuid, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		log.Printf("Invalid Bearer Token: %v", err)
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "Invalid Bearer Token"})
+		return
+	}
+
+	chirpUuid, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "Invalid UUID"})
+		return
+	}
+
+	chirp, err := cfg.db.GetSingleChirp(r.Context(), chirpUuid)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// No chirp found
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "Chirp not found"})
+			return
+		}
+
+		// Other DB error
+		log.Printf("Error getting chirp: %v", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Internal server error"})
+		return
+	}
+
+	// check if users match
+	if chirp.UserID != userUuid {
+		writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "User unathorized to delete chirp"})
+		return
+	}
+
+	err = cfg.db.DeleteSingleChirp(r.Context(), chirpUuid)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Error deleting chirp"})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -487,11 +605,14 @@ func main() {
 
 	mux.HandleFunc("GET /api/healthz", healthzHandler)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+
 	mux.HandleFunc("POST /api/users", cfg.createUserHandler)
+	mux.HandleFunc("PUT /api/users", cfg.updateUserHandler)
 
 	mux.HandleFunc("POST /api/chirps", cfg.postChirpHandler)
 	mux.HandleFunc("GET /api/chirps", cfg.getAllChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getSingleChirpHandler)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.deleteSingleChirpHandler)
 
 	mux.HandleFunc("POST /api/login", cfg.loginHandler)
 	mux.HandleFunc("POST /api/refresh", cfg.refreshTokenHandler)
