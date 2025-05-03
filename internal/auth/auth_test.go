@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -61,5 +62,48 @@ func TestJWT_InvalidSignature(t *testing.T) {
 	_, err = ValidateJWT(token, wrongSecret)
 	if err == nil {
 		t.Error("expected error for token with invalid signature, got nil")
+	}
+}
+
+func TestGetBearerToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers http.Header
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "valid token",
+			headers: http.Header{"Authorization": []string{"Bearer abc123"}},
+			want:    "abc123",
+			wantErr: false,
+		},
+		{
+			name:    "missing header",
+			headers: http.Header{},
+			wantErr: true,
+		},
+		{
+			name:    "wrong prefix",
+			headers: http.Header{"Authorization": []string{"Token abc123"}},
+			wantErr: true,
+		},
+		{
+			name:    "empty token",
+			headers: http.Header{"Authorization": []string{"Bearer "}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := GetBearerToken(tt.headers)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("got = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
