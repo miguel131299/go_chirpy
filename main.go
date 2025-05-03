@@ -338,11 +338,33 @@ func (cfg *apiConfig) postChirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.db.GetAllChirps(r.Context()) // returns []Chirp
-	if err != nil {
-		log.Printf("Error getting chirps: %v", err)
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Could not create user"})
-		return
+	authorIDStr := r.URL.Query().Get("author_id")
+
+	var chirps []database.Chirp
+	var err error
+
+	if authorIDStr != "" {
+		// get chirps from user
+		parsedUUID, err := uuid.Parse(authorIDStr)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "Invalid UUID"})
+			return
+		}
+
+		chirps, err = cfg.db.GetChirpsByAuthor(r.Context(), parsedUUID) // returns []Chirp
+		if err != nil {
+			log.Printf("Error getting chirps: %v", err)
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Could not create user"})
+			return
+		}
+	} else {
+		// get all chirps
+		chirps, err = cfg.db.GetAllChirps(r.Context()) // returns []Chirp
+		if err != nil {
+			log.Printf("Error getting chirps: %v", err)
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Could not create user"})
+			return
+		}
 	}
 
 	var responses []ChirpResponse
