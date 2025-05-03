@@ -23,6 +23,65 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	jwtSecret      string
+	polkaAPIKey    string
+}
+
+type CreateUserParams struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type UserResponse struct {
+	ID          string `json:"id"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	Email       string `json:"email"`
+	IsChirpyRed bool   `json:"is_chirpy_red"`
+}
+
+type LoginResponse struct {
+	ID           string `json:"id"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	Email        string `json:"email"`
+	IsChirpyRed  bool   `json:"is_chirpy_red"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
+type CleanedResponse struct {
+	CleanedBody string `json:"cleaned_body"`
+}
+
+type ChirpParams struct {
+	// these tags indicate how the keys in the JSON should be mapped to the struct fields
+	// the struct fields must be exported (start with a capital letter) if you want them parsed
+	Body string `json:"body"`
+}
+
+type EventData struct {
+	UserID string `json:"user_id"`
+}
+
+type EventRequest struct {
+	Event string    `json:"event"`
+	Data  EventData `json:"data"`
+}
+
+type ChirpResponse struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Body      string `json:"body"`
+	UserID    string `json:"user_id"`
+}
+
+type TokenResponse struct {
+	Token string `json:"token"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -64,27 +123,12 @@ func sanitizeChirp(input string) string {
 }
 
 func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
-	type ChirpParams struct {
-		// these tags indicate how the keys in the JSON should be mapped to the struct fields
-		// the struct fields must be exported (start with a capital letter) if you want them parsed
-		Body string `json:"body"`
-	}
-
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
-	type CleanedResponse struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-
 	var params ChirpParams
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
 		log.Printf("Error decoding JSON: %v", err)
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Something went wrong"})
 		return
 	}
-
 }
 
 func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
@@ -108,23 +152,7 @@ func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
-	type UserParams struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
-	type UserResponse struct {
-		ID        string `json:"id"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
-		Email     string `json:"email"`
-	}
-
-	var params UserParams
+	var params CreateUserParams
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
 		log.Printf("Error decoding JSON: %v", err)
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Something went wrong"})
@@ -150,32 +178,17 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	response := UserResponse{
-		ID:        user.ID.String(),
-		Email:     user.Email,
-		CreatedAt: user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+		ID:          user.ID.String(),
+		Email:       user.Email,
+		CreatedAt:   user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   user.UpdatedAt.Format(time.RFC3339),
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	writeJSON(w, http.StatusCreated, response)
 }
 
 func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, r *http.Request) {
-	type UserParams struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
-	type UserResponse struct {
-		ID        string `json:"id"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
-		Email     string `json:"email"`
-	}
-
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		log.Printf("Error getting Bearer Token: %v", err)
@@ -183,7 +196,7 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var params UserParams
+	var params CreateUserParams
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
 		log.Printf("Error decoding JSON: %v", err)
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Something went wrong"})
@@ -216,31 +229,64 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	response := UserResponse{
-		ID:        user.ID.String(),
-		Email:     user.Email,
-		CreatedAt: user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+		ID:          user.ID.String(),
+		Email:       user.Email,
+		CreatedAt:   user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   user.UpdatedAt.Format(time.RFC3339),
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (cfg *apiConfig) upgradeUserRedHandler(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "Something went wrong reading API Key"})
+		return
+	}
+
+	if apiKey != cfg.polkaAPIKey {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "Wrong API Key"})
+		return
+	}
+	var params EventRequest
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		log.Printf("Error decoding JSON: %v", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Something went wrong"})
+		return
+	}
+
+	// don't care about other events
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	parsedUUID, err := uuid.Parse(params.Data.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "Invalid UUID"})
+		return
+	}
+
+	_, err = cfg.db.SetUserChirpRed(r.Context(), parsedUUID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// No chirp found
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "user not found"})
+			return
+		}
+
+		// Other DB error
+		log.Printf("Error getting user: %v", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Internal server error"})
+		return
+	}
+
+	w.WriteHeader(204)
+}
+
 func (cfg *apiConfig) postChirpHandler(w http.ResponseWriter, r *http.Request) {
-	type ChirpParams struct {
-		Body string `json:"body"`
-	}
-
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
-	type ChirpResponse struct {
-		ID        string `json:"id"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
-		Body      string `json:"body"`
-		UserID    string `json:"user_id"`
-	}
 
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
@@ -292,18 +338,6 @@ func (cfg *apiConfig) postChirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) {
-	type ChirpResponse struct {
-		ID        string `json:"id"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
-		Body      string `json:"body"`
-		UserID    string `json:"user_id"`
-	}
-
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
 	chirps, err := cfg.db.GetAllChirps(r.Context()) // returns []Chirp
 	if err != nil {
 		log.Printf("Error getting chirps: %v", err)
@@ -328,18 +362,6 @@ func (cfg *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (cfg *apiConfig) getSingleChirpHandler(w http.ResponseWriter, r *http.Request) {
-	type ChirpResponse struct {
-		ID        string `json:"id"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
-		Body      string `json:"body"`
-		UserID    string `json:"user_id"`
-	}
-
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
 	parsedUUID, err := uuid.Parse(r.PathValue("chirpID"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "Invalid UUID"})
@@ -373,10 +395,6 @@ func (cfg *apiConfig) getSingleChirpHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (cfg *apiConfig) deleteSingleChirpHandler(w http.ResponseWriter, r *http.Request) {
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		log.Printf("Error getting Bearer Token: %v", err)
@@ -426,25 +444,7 @@ func (cfg *apiConfig) deleteSingleChirpHandler(w http.ResponseWriter, r *http.Re
 }
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
-	type UserParams struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
-	type UserResponse struct {
-		ID           string `json:"id"`
-		CreatedAt    string `json:"created_at"`
-		UpdatedAt    string `json:"updated_at"`
-		Email        string `json:"email"`
-		Token        string `json:"token"`
-		RefreshToken string `json:"refresh_token"`
-	}
-
-	var params UserParams
+	var params CreateUserParams
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
 		log.Printf("Error decoding JSON: %v", err)
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Something went wrong"})
@@ -495,27 +495,20 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := UserResponse{
+	response := LoginResponse{
 		ID:           user.ID.String(),
 		Email:        user.Email,
 		CreatedAt:    user.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:    user.UpdatedAt.Format(time.RFC3339),
 		Token:        token,
 		RefreshToken: refreshToken,
+		IsChirpyRed:  user.IsChirpyRed,
 	}
 
 	writeJSON(w, http.StatusOK, response)
 }
 
 func (cfg *apiConfig) refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
-	type UserResponse struct {
-		Token string `json:"token"`
-	}
-
 	refreshToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "Error getting bearer token"})
@@ -554,14 +547,10 @@ func (cfg *apiConfig) refreshTokenHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusOK, UserResponse{Token: accessToken})
+	writeJSON(w, http.StatusOK, TokenResponse{Token: accessToken})
 }
 
 func (cfg *apiConfig) revokeTokenHandler(w http.ResponseWriter, r *http.Request) {
-	type ErrorResponse struct {
-		Error string `json:"error"`
-	}
-
 	refreshToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "Error getting bearer token"})
@@ -589,6 +578,7 @@ func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	jwtSecret := os.Getenv("JWT_SECRET")
+	polkaAPIKey := os.Getenv("POLKA_KEY")
 
 	db, _ := sql.Open("postgres", dbURL)
 
@@ -597,6 +587,7 @@ func main() {
 	var cfg apiConfig
 	cfg.db = dbQueries
 	cfg.jwtSecret = jwtSecret
+	cfg.polkaAPIKey = polkaAPIKey
 
 	mux := http.NewServeMux()
 
@@ -608,6 +599,8 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", cfg.createUserHandler)
 	mux.HandleFunc("PUT /api/users", cfg.updateUserHandler)
+
+	mux.HandleFunc("POST /api/polka/webhooks", cfg.upgradeUserRedHandler)
 
 	mux.HandleFunc("POST /api/chirps", cfg.postChirpHandler)
 	mux.HandleFunc("GET /api/chirps", cfg.getAllChirpsHandler)
